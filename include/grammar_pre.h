@@ -4,6 +4,8 @@
 #include <regex>
 #include <iostream>
 
+
+
 class Logger {
 public:
     explicit Logger(const char* name) : name_(name) {
@@ -32,7 +34,7 @@ private:
     static int depth_;
 };
 
-// TODO REMOVE NAFIG
+// TO_DO REMOVE NAFIG
 int Logger::depth_ = 0;
 
 #define DEFGRAMMAR(name) namespace name##Grammar {
@@ -52,6 +54,8 @@ public:                                                                         
     void Commit() {txs_.pop_back(); }                                                               \
                                                                                                     \
     auto& GetChildren() { return children_; }                                                       \
+                                                                                                    \
+    const auto& GetChildren() const { return children_; }                                           \
                                                                                                     \
     void Append(NodePtr&& node) {                                                                   \
         children_.emplace_back(std::move(node));                                                    \
@@ -95,10 +99,8 @@ class Parser {                                                                  
 
 
 #define DEFRULE(name)                                                                               \
-private:                                                                                            \
-    static constexpr int k##name##Type = __COUNTER__;                                               \
-                                                                                                    \
 public:                                                                                             \
+    static constexpr int k##name##Type = __COUNTER__;                                               \
     class name##Node : public ASTNodeBasic {                                                        \
     public:                                                                                         \
         virtual int GetType() const override { return k##name##Type; }                              \
@@ -111,7 +113,7 @@ public:                                                                         
     };                                                                                              \
 private:                                                                                            \
     NodePtr Parse##name() {                                                                         \
-        Logger logger(__PRETTY_FUNCTION__);                                                         \
+        Logger logger(__PRETTY_FUNCTION__); /**/                                                   \
         NodePtr result = std::make_unique< name##Node >();
 
 
@@ -178,7 +180,16 @@ while (true) {                                                                  
 #define OR6(a, b, c, d, e, f) OR(a, OR5(b, c, d, e, f))
 #define MAYBE(body) OR(body, )
 
-#define DEFTOKENS()
+#define DEFTOKENS()                                                                                 \
+    private:                                                                                        \
+        class ASTTokenBasic : public ASTNodeBasic {                                                 \
+        public:                                                                                     \
+            const std::string& GetStr() const { return str_; }                                      \
+            explicit ASTTokenBasic(const std::string& str) : str_(str) {}                           \
+                                                                                                    \
+        protected:                                                                                  \
+            std::string str_;                                                                       \
+        };
 #define ENDTOKENS()
 
 
@@ -186,11 +197,10 @@ while (true) {                                                                  
 
 #define DEFTOKEN(name, regexp)                                                                      \
     private:                                                                                        \
-        std::regex Regex##name {"(" regexp ")[^]*"};                                                  \
-        static constexpr int k##name##Type = __COUNTER__;                                           \
+        std::regex Regex##name {"(" regexp ")[^]*"};                                                \
                                                                                                     \
     NodePtr NextToken##name() {                                                                     \
-        Logger logger(__PRETTY_FUNCTION__);                                                         \
+        Logger logger(__PRETTY_FUNCTION__); /**/                                                 \
         /* Skip spaces */                                                                           \
         while (pos_ != str_->end() && std::isspace(*pos_)) { ++pos_; }                              \
         std::smatch match;                                                                          \
@@ -207,18 +217,15 @@ while (true) {                                                                  
     }                                                                                               \
                                                                                                     \
     public:                                                                                         \
-        class name##Node : public ASTNodeBasic {                                                    \
+        static constexpr int k##name##Type = __COUNTER__;                                           \
+        class name##Node : public ASTTokenBasic {                                                   \
         public:                                                                                     \
-            explicit name##Node(const std::string& str) : str_(str) {}                              \
-                                                                                                    \
-            const std::string& GetStr() const { return str_; }                                      \
+            explicit name##Node(const std::string& str) : ASTTokenBasic(str) {}                     \
                                                                                                     \
             virtual int GetType() const override { return k##name##Type; }                          \
                                                                                                     \
             virtual const char* GetName() const override { return #name ; }                         \
                                                                                                     \
-        private:                                                                                    \
-            std::string str_;                                                                       \
         public:
 
 

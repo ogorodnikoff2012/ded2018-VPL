@@ -7,11 +7,10 @@ set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O2 -Wall -Wextra")
 
 include_directories(include)
 
-# set(LIBRARY_SRC )
+# set(LIBRARY_SRC src/vpl/program.cpp src/vpl/function_declaration.cpp src/vpl/function.cpp src/vpl/block.cpp)
 
-# add_library(vpl STATIC ${LIBRARY_SRC})
-add_executable(vpl_front src/vpl_front.cpp)
-add_executable(vpl_back  src/vpl_back.cpp)
+# add_library(vpllib STATIC ${LIBRARY_SRC})
+add_executable(vpl src/vpl.cpp)
 
-# target_link_libraries(vpl_front vpl)
+# target_link_libraries(vpl vpllib)
 # target_link_libraries(vpl_back vpl)

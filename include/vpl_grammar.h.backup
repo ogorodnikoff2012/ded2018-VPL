@@ -4,7 +4,7 @@
 #include <iomanip>
 #include <memory>
 
-#include "vpl/scope.h"
+#include "vpl/program.h"
 
 #define GET_TOKEN_STRING(node) dynamic_cast<const ASTTokenBasic*>(( node ).get())->GetStr()
 
@@ -24,9 +24,9 @@ DEFGRAMMAR(VPL)
             }
             out << ']';
         }
-        virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const {
+        virtual void BuildProgram(vpl::Program* program) const {
             for (const auto& child : children_) {
-                child->BuildProgram(scope, out);
+                child->BuildProgram(program);
             }
         }
     ENDBASICNODE()
@@ -35,12 +35,7 @@ DEFGRAMMAR(VPL)
 
     DEFRULES()
         DEFRULE(MainRule)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                for (size_t i = 0; i < children_.size(); ++i) {
-                    children_[i]->BuildProgram(scope, out);
-                }
-                scope->Finish();
-            }
+
         BEGINRULE(MainRule)
             ASTERISK(OR(
                 EXPECT(func, RULE(FunctionDefinition)),
@@ -50,13 +45,12 @@ DEFGRAMMAR(VPL)
         ENDRULE(MainRule)
 
         DEFRULE(FunctionDefinition)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                children_[0]->BuildProgram(scope, out);
-                out << "func " << scope->GetLastFunctionName() << '\n';
-                scope->SpawnFunctionScope();
-                children_[1]->BuildProgram(scope, out);
-                scope->CloseScope();
-                out << "    ret\n";
+            virtual void BuildProgram(vpl::Program* program) const override {
+                program->CreateFunction();
+                children_[0]->BuildProgram(program);
+                program->BeginBody();
+                children_[1]->BuildProgram(program);
+                program->EndFunction();
             }
         BEGINRULE(FunctionDefinition)
             EXPECT(decl, RULE(FunctionDeclaration));
@@ -64,12 +58,12 @@ DEFGRAMMAR(VPL)
         ENDRULE(FunctionDefinition)
 
         DEFRULE(CompoundStatement)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                scope->OpenScope();
+            virtual void BuildProgram(vpl::Program* program) const override {
+                program->CreateBlock();
                 for (const auto& child : children_) {
-                    child->BuildProgram(scope, out);
+                    child->BuildProgram(program);
                 }
-                scope->CloseScope();
+                program->EndBlock();
             }
         BEGINRULE(CompoundStatement)
             TOKEN(LeftBrace);
@@ -90,11 +84,12 @@ DEFGRAMMAR(VPL)
         ENDRULE(Statement)
 
         DEFRULE(ExpressionStatement)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
+            virtual void BuildProgram(vpl::Program* program) const override {
                 if (!children_.empty()) {
-                    scope->SaveStackPos();
-                    children_[0]->BuildProgram(scope, out);
-                    scope->RestoreStackPos();
+                    program->CreateExpression();
+                    children_[0]->BuildProgram(program);
+                    program->FlushStack();
+                    program->EndExpression();
                 }
             }
         BEGINRULE(ExpressionStatement)
@@ -103,25 +98,16 @@ DEFGRAMMAR(VPL)
         ENDRULE(ExpressionStatement)
 
         DEFRULE(IfStatement)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                int unique_id = scope->GetUnique();
-
-                out << "func .L" << unique_id << "_if\n";
-                children_[0]->BuildProgram(scope, out);
-                out << "    jz .L" << unique_id << "_else\n";
-
-                out << "func .L" << unique_id << "_then\n";
-                out << "    pop 0\n";
-                children_[1]->BuildProgram(scope, out);
-                out << "    jmp .L" << unique_id << "_end\n";
-
-                out << "func .L" << unique_id << "_else\n";
-                out << "    pop 0\n";
+            virtual void BuildProgram(vpl::Program* program) const override {
+                program->CreateIfBlock();
+                children_[0]->BuildProgram(program);
+                program->BeginTrueBranch();
+                children_[1]->BuildProgram(program);
+                program->BeginFalseBranch();
                 if (children_.size() == 3) {
-                    children_[2]->BuildProgram(scope, out);
+                    children_[2]->BuildProgram(program);
                 }
-
-                out << "func .L" << unique_id << "_end\n";
+                program->EndIfBlock();
             }
         BEGINRULE(IfStatement)
             TOKEN(IfKeyword);
@@ -145,19 +131,12 @@ DEFGRAMMAR(VPL)
         ENDRULE(LoopStatement)
 
         DEFRULE(WhileStatement)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                int unique_id = scope->GetUnique();
-
-                out << "func .L" << unique_id << "_while\n";
-                children_[0]->BuildProgram(scope, out);
-                out << "    jz .L" << unique_id << "_end_while\n";
-
-                out << "    pop 0\n";
-                children_[1]->BuildProgram(scope, out);
-                out << "    jmp .L" << unique_id << "_while\n";
-                out << "func .L" << unique_id << "_end_while\n";
-                out << "    pop 0\n";
-                out << "func .L" << unique_id << "_end\n";
+            virtual void BuildProgram(vpl::Program* program) const override {
+                program->CreateWhileLoop();
+                children_[0]->BuildProgram(program);
+                program->BeginBody();
+                children_[1]->BuildProgram(program);
+                program->EndWhileLoop();
             }
         BEGINRULE(WhileStatement)
             TOKEN(WhileKeyword);
@@ -168,16 +147,12 @@ DEFGRAMMAR(VPL)
         ENDRULE(WhileStatment)
 
         DEFRULE(DoWhileStatment)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                int unique_id = scope->GetUnique();
-                out << "    push 0\n";
-                out << "func .L" << unique_id << "_do_while\n";
-                out << "    pop 0\n";
-                children_[0]->BuildProgram(scope, out);
-                children_[1]->BuildProgram(scope, out);
-                out << "    jnz .L" << unique_id << "_do_while\n";
-                out << "    pop 0\n";
-                out << "func .L" << unique_id << "_end\n";
+            virtual void BuildProgram(vpl::Program* program) const override {
+                program->CreateDoWhileLoop();
+                children_[0]->BuildProgram(program);
+                program->BeginCondition();
+                children_[1]->BuildProgram(program);
+                program->EndDoWhileLoop();
             }
         BEGINRULE(DoWhileStatment)
             TOKEN(DoKeyword);
@@ -190,19 +165,18 @@ DEFGRAMMAR(VPL)
         ENDRULE(DoWhileStatment)
 
         DEFRULE(ForStatement)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                int unique_id = scope->GetUnique();
-                children_[0]->BuildProgram(scope, out);
-                out << "func .L" << unique_id << "_for\n";
-                children_[1]->BuildProgram(scope, out);
-                out << "    jz .L" << unique_id << "_end_for\n";
-                out << "    pop 0\n";
-                children_[3]->BuildProgram(scope, out);
-                children_[2]->BuildProgram(scope, out);
-                out << "    jmp .L" << unique_id << "_for\n";
-                out << "func .L" << unique_id << "_end_for\n";
-                out << "    pop 0\n";
-                out << "func .L" << unique_id << "_end\n";
+            virtual void BuildProgram(vpl::Program* program) const override {
+                children_[0]->BuildProgram(program);
+                program->CreateWhileLoop();
+                children_[1]->BuildProgram(program);
+                program->BeginBody();
+                children_.back()->BuildProgram(program);
+                if (children_.size() == 4) {
+                    program->CreateExpression();
+                    children_[2]->BuildProgram(program);
+                    program->EndExpression();
+                }
+                program->EndWhileLoop();
             }
         BEGINRULE(ForStatement)
             TOKEN(ForKeyword);
@@ -215,22 +189,27 @@ DEFGRAMMAR(VPL)
         ENDRULE(ForStatement)
 
         DEFRULE(JumpStatement)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                if (children_[0]->GetType() == kBreakKeywordType) {
-                    out << "    jmp .L" << scope->GetPreviousUnique() << "_end\n";
-                } else {
-                    if (children_.size() == 2) {
-                        children_[1]->BuildProgram(scope, out);
-                    }
-                    if (children_.size() == 2) {
-                        out << "    pop %" << scope->RetRegister() << '\n';
-                    }
-                    out << "    ret\n";
+            virtual void BuildProgram(vpl::Program* program) const override {
+                switch (children_[0]->GetType()) {
+                    case kContinueKeywordType:
+                        program->ContinueKeyword();
+                        break;
+                    case kBreakKeywordType:
+                        program->BreakKeyword();
+                        break;
+                    case kReturnKeywordType:
+                        if (children_.size() == 2) {
+                            program->CreateExpression();
+                            children_[1]->BuildProgram(program);
+                            program->EndExpression();
+                        }
+                        program->ReturnKeyword();
+                        break;
                 }
             }
         BEGINRULE(JumpStatement)
-            OR(
-//                EXPECT(continue_stmt, TOKEN(ContinueKeyword)),
+            OR3(
+                EXPECT(continue_stmt, TOKEN(ContinueKeyword)),
                 EXPECT(break_stmt, TOKEN(BreakKeyword)),
                 {
                     EXPECT(return_stmt, TOKEN(ReturnKeyword));
@@ -242,8 +221,8 @@ DEFGRAMMAR(VPL)
 
         DEFRULE(DeclarationStatement)
         BEGINRULE(DeclarationStatement)
-            OR(
-//                EXPECT(struct_decl, RULE(StructDeclaration)),
+            OR3(
+                EXPECT(struct_decl, RULE(StructDeclaration)),
 //                EXPECT(typedef_decl, RULE(TypedefDeclaration)),
                 EXPECT(func_decl, RULE(FunctionDeclaration)),
                 EXPECT(var_decl, RULE(VariableDeclaration))
@@ -269,21 +248,37 @@ DEFGRAMMAR(VPL)
         ENDRULE(ExternStaticSpecifier)
 */
         DEFRULE(VariableDeclaration)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                scope->CreateVariable(GET_TOKEN_STRING(children_[0]));
+            virtual void BuildProgram(vpl::Program* program) const override {
+                program->CreateVariable();
+//                children_[0]->BuildProgram(program);
+                // Name
+                program->SetName(GET_TOKEN_STRING(children_[1]));
+
+                // Type
+                program->BeginType();
+                children_[0]->BuildProgram(program);
+
+                program->EndVariable();
+                if (children_.size() == 3) {
+                    program->CreateExpression();
+                    children_[2]->BuildProgram(program);
+                    program->LoadVariable(GET_TOKEN_STRING(children_[1]));
+                    program->PrepareToAssign();
+                    program->Pop();
+                    program->Assign();
+                    program->EndExpression();
+                }
             }
         BEGINRULE(VariableDeclaration)
  //           EXPECT(spec, RULE(ExternStaticSpecifier));
-//            EXPECT(type, RULE(TypeName));
-            TOKEN(IntType);
+            EXPECT(type, RULE(TypeName));
             EXPECT(name, TOKEN(Identifier));
-/*            MAYBE({
+            MAYBE({
                 TOKEN(Assign);
                 EXPECT(init, RULE(OrExpression));
-            });*/
+            });
         ENDRULE(VariableDeclaration)
 
-    /*
         DEFRULE(StructDeclaration)
             virtual void BuildProgram(vpl::Program* program) const override {
                 program->CreateStructure();
@@ -306,12 +301,19 @@ DEFGRAMMAR(VPL)
             });
             TOKEN(RightBrace);
         ENDRULE(StructDeclaration)
-*/
+
         DEFRULE(FunctionDeclaration)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                scope->DeclareFunction(GET_TOKEN_STRING(children_[1]));
-                children_[2]->BuildProgram(scope, out);
-                scope->EndFunctionDeclaration();
+            virtual void BuildProgram(vpl::Program* program) const override {
+                program->DeclareFunction();
+                // Name
+                program->SetName(GET_TOKEN_STRING(children_[1]));
+
+                // Type
+//                children_[0]->BuildProgram(program);
+                program->BeginType();
+                children_[0]->BuildProgram(program);
+                children_[2]->BuildProgram(program);
+                program->EndFunctionDeclaration();
             }
         BEGINRULE(FunctionDeclaration)
 //            EXPECT(spec, RULE(ExternStaticSpecifier));
@@ -335,8 +337,10 @@ DEFGRAMMAR(VPL)
         ENDRULE(DeclarationArgumentList)
 
         DEFRULE(DeclarationArgument)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                scope->AddArgumentName(GET_TOKEN_STRING(children_[1]));
+            virtual void BuildProgram(vpl::Program* program) const override {
+                program->BeginType();
+                children_[0]->BuildProgram(program);
+                program->SetName(GET_TOKEN_STRING(children_[1]));
             }
         BEGINRULE(DeclarationArgument)
             EXPECT(type, RULE(TypeName));
@@ -396,12 +400,13 @@ DEFGRAMMAR(VPL)
         ENDRULE(FunctionPointerTypedef)
 */
         DEFRULE(Expression)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                children_[0]->BuildProgram(scope, out);
+            virtual void BuildProgram(vpl::Program* program) const override {
+                program->SaveStackPos();
+                children_[0]->BuildProgram(program);
                 for (size_t i = 1; i < children_.size(); ++i) {
-                    scope->SaveStackPos();
-                    scope->RestoreStackPos();
-                    children_[i]->BuildProgram(scope, out);
+                    program->FlushStack();
+                    program->SaveStackPos();
+                    children_[i]->BuildProgram(program);
                 }
             }
         BEGINRULE(Expression)
@@ -413,27 +418,65 @@ DEFGRAMMAR(VPL)
         ENDRULE(Expression)
 
         DEFRULE(AssignmentExpression)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                if (children_.size() == 1) {
-                    children_[0]->BuildProgram(scope, out);
-                    return;
+            virtual void BuildProgram(vpl::Program* program) const override {
+                children_.back()->BuildProgram(program);
+                for (int i = children_.size() - 2; i > 0; i -= 2) {
+                    children_[i - 1]->BuildProgram(program);
+                    children_[i]->BuildProgram(program);
                 }
-                children_[1]->BuildProgram(scope, out);
-                scope->LoadVariableAddr(GET_TOKEN_STRING(children_[0]));
-                out << "    pop %" << scope->AssignRegister() << '\n';
-                scope->Pop();
-                out << "    dup\n";
-                out << "    pop !" << scope->AssignRegister() << '\n';
             }
         BEGINRULE(AssignmentExpression)
-            MAYBE({
-                EXPECT(name, TOKEN(Identifier));
-                TOKEN(Assign);
+            ASTERISK({
+                EXPECT(unary_expr, RULE(UnaryExpression));
+                EXPECT(assign_op, RULE(AssignmentOperator));
             });
             EXPECT(cond_expr, RULE(OrExpression));
         ENDRULE(AssignmentExpression)
 
         DEFRULE(AssignmentOperator)
+            virtual void BuildProgram(vpl::Program* program) const override {
+                int op_type = children_[0]->GetType();
+                program->PrepareToAssign();
+                if (op_type == kAssignType) {
+                    program->Pop();
+                } else {
+                    program->Dereference();
+                    program->Swap();
+                }
+                switch (children_[0]->GetType()) {
+                    case kAddAssignType:
+                        program->Add();
+                        break;
+                    case kSubAssignType:
+                        program->Sub();
+                        break;
+                    case kMulAssignType:
+                        program->Mul();
+                        break;
+                    case kDivAssignType:
+                        program->Div();
+                        break;
+                    case kModAssignType:
+                        program->Mod();
+                        break;
+                    case kShiftLeftAssignType:
+                        program->ShiftLeft();
+                        break;
+                    case kShiftRightAssignType:
+                        program->ShiftRight();
+                        break;
+                    case kAndAssignType:
+                        program->BitwiseAnd();
+                        break;
+                    case kOrAssignType:
+                        program->BitwiseOr();
+                        break;
+                    case kXorAssignType:
+                        program->BitwiseXor();
+                        break;
+                }
+                program->Assign();
+            }
         BEGINRULE(AssignmentOperator)
             OR6(
                 EXPECT(op, TOKEN(Assign)),
@@ -452,16 +495,44 @@ DEFGRAMMAR(VPL)
         ENDRULE(AssignmentOperator)
 
         DEFRULE(UnaryExpression)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                for (int i = children_.size() - 1; i >= 0; --i) {
-                    children_[i]->BuildProgram(scope, out);
+            virtual void BuildProgram(vpl::Program* program) const override {
+                if (children_.size() == 1) {
+                    children_[0]->BuildProgram(program);
+                    return;
+                }
+                int op_type = children_[0]->GetType();
+                switch (op_type) {
+                    case kIncOpType:
+                        children_[1]->BuildProgram(program);
+                        program->Dup();
+                        program->PrepareToAssign();
+                        program->Dereference();
+                        program->Inc();
+                        program->Assign();
+                        break;
+                    case kDecOpType:
+                        children_[1]->BuildProgram(program);
+                        program->Dup();
+                        program->PrepareToAssign();
+                        program->Dereference();
+                        program->Dec();
+                        program->Assign();
+                        break;
+                    case kUnaryOperatorType:
+                        children_[1]->BuildProgram(program);
+                        children_[0]->BuildProgram(program);
+                        break;
+                    case kSizeofKeywordType:
+                        program->BeginSizeof();
+                        children_[1]->BuildProgram(program);
+                        program->EndSizeof();
+                        break;
                 }
             }
         BEGINRULE(UnaryExpression)
-//            OR5(
-            ASTERISK(EXPECT(op, RULE(UnaryOperator)));
-            EXPECT(postfix_expr, RULE(PostfixExpression));
-/*                {
+            OR5(
+                EXPECT(postfix_expr, RULE(PostfixExpression)),
+                {
                     EXPECT(inc_op, TOKEN(IncOp));
                     EXPECT(unary_expr, RULE(UnaryExpression));
                 },
@@ -473,20 +544,28 @@ DEFGRAMMAR(VPL)
                     EXPECT(unary_op, RULE(UnaryOperator));
                     EXPECT(cast_expr, RULE(CastExpression));
                 },
-                {
+/*              {
                     EXPECT(sizeof_op, TOKEN(SizeofKeyword));
                     EXPECT(unary_expr, RULE(UnaryExpression));
-                },
+                }, */
                 {
                     EXPECT(sizeof_op, TOKEN(SizeofKeyword));
                     TOKEN(LeftParen);
                     EXPECT(type, RULE(TypeName));
                     TOKEN(RightParen);
                 }
-            );*/
+            );
         ENDRULE(UnaryExpression)
 
         DEFRULE(CastExpression)
+            virtual void BuildProgram(vpl::Program* program) const override {
+                children_.back()->BuildProgram(program);
+                if (children_.size() == 2) {
+                    program->BeginCast();
+                    children_[0]->BuildProgram(program);
+                    program->EndCast();
+                }
+            }
         BEGINRULE(CastExpression)
             OR(
                 {
@@ -501,15 +580,22 @@ DEFGRAMMAR(VPL)
 
 
         DEFRULE(TypeName)
+            virtual void BuildProgram(vpl::Program* program) const override {
+                children_[0]->BuildProgram(program);
+                for (size_t i = 1; i < children_.size(); ++i) {
+                    program->AddPointer();
+                }
+            }
         BEGINRULE(TypeName)
             EXPECT(simple_type, RULE(SimpleType));
-        //    ASTERISK(EXPECT(asterisk, TOKEN(Asterisk)));
+            ASTERISK(EXPECT(asterisk, TOKEN(Asterisk)));
         ENDRULE(TypeName)
 
         DEFRULE(SimpleType)
+            virtual void BuildProgram(vpl::Program* program) const override {
+                program->FindTypeByName(GET_TOKEN_STRING(children_[0]));
+            }
         BEGINRULE(SimpleType)
-            TOKEN(IntType);
-/*
             OR5(
                 EXPECT(type, TOKEN(BoolType)),
                 EXPECT(type, TOKEN(IntType)),
@@ -517,16 +603,35 @@ DEFGRAMMAR(VPL)
                 EXPECT(type, TOKEN(VoidType)),
                 EXPECT(type, TOKEN(Identifier))
             );
-            */
         ENDRULE(SimpleType)
 
         DEFRULE(PostfixExpression)
+            virtual void BuildProgram(vpl::Program* program) const override {
+                children_[0]->BuildProgram(program);
+                for (size_t i = 1; i < children_.size(); ++i) {
+                    int op_type = children_[i]->GetType();
+                    if (op_type == kIncOpType || op_type == kDecOpType) {
+                        program->Dup();
+                        program->Dereference();
+                        program->Swap();
+                        program->PrepareToAssign();
+                        program->Dereference();
+                        if (op_type == kIncOpType) {
+                            program->Inc();
+                        } else {
+                            program->Dec();
+                        }
+                        program->Assign();
+                    } else {
+                        children_[i]->BuildProgram(program);
+                    }
+                }
+            }
         BEGINRULE(PostfixExpression)
             OR(
                 EXPECT(call_expr, RULE(CallExpression)),
                 EXPECT(primary_expr, RULE(PrimaryExpression))
             );
-/*
             ASTERISK(OR5(
                 EXPECT(subscript_op, RULE(SubscriptOp)),
 //                EXPECT(call_op, RULE(CallOp)),
@@ -535,14 +640,13 @@ DEFGRAMMAR(VPL)
                 EXPECT(inc_op, TOKEN(IncOp)),
                 EXPECT(dec_op, TOKEN(DecOp))
             ));
-            */
         ENDRULE(PostfixExpression)
 
         DEFRULE(CallExpression)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                scope->PrepareFunction(GET_TOKEN_STRING(children_[0]));
-                children_[1]->BuildProgram(scope, out);
-                scope->CallFunction(GET_TOKEN_STRING(children_[0]));
+            virtual void BuildProgram(vpl::Program* program) const override {
+                program->PrepareToCall(GET_TOKEN_STRING(children_[0]));
+                children_[1]->BuildProgram(program);
+                program->Call();
             }
         BEGINRULE(CallExpression)
             EXPECT(func_name, TOKEN(Identifier));
@@ -550,19 +654,16 @@ DEFGRAMMAR(VPL)
         ENDRULE(CallExpression)
 
         DEFRULE(PrimaryExpression)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                switch (children_[0]->GetType()) {
-                    case kConstantType:
-                    case kBoolConstantType:
-                        out << "    push " << GET_TOKEN_STRING(children_[0]) << '\n';
-                        scope->Push();
-                        break;
-                    case kIdentifierType:
-                        scope->LoadVariable(GET_TOKEN_STRING(children_[0]));
-                        break;
-                    default:
-                        children_[0]->BuildProgram(scope, out);
-                        break;
+            virtual void BuildProgram(vpl::Program* program) const override {
+                int node_type = children_[0]->GetType();
+                if (node_type == kIdentifierType) {
+                    program->LoadVariable(GET_TOKEN_STRING(children_[0]));
+                } else if (node_type == kConstantType) {
+                    program->LoadConstant(GET_TOKEN_STRING(children_[0]));
+                } else if (node_type == kBoolConstantType) {
+                    program->LoadBoolConstant(GET_TOKEN_STRING(children_[0]));
+                } else {
+                    children_[0]->BuildProgram(program);
                 }
             }
         BEGINRULE(PrimaryExpression)
@@ -579,6 +680,10 @@ DEFGRAMMAR(VPL)
         ENDRULE(PrimaryExpression)
 
         DEFRULE(SubscriptOp)
+            virtual void BuildProgram(vpl::Program* program) const override {
+                children_[0]->BuildProgram(program);
+                program->Subscript();
+            }
         BEGINRULE(SubscriptOp)
             TOKEN(LeftBracket);
             EXPECT(expr, RULE(Expression));
@@ -586,55 +691,72 @@ DEFGRAMMAR(VPL)
         ENDRULE(SubscriptOp)
 
         DEFRULE(CallOp)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                scope->CheckArgCnt(children_.size());
-                for (int i = children_.size() - 1; i >= 0; --i) {
-                    children_[i]->BuildProgram(scope, out);
+            virtual void BuildProgram(vpl::Program* program) const override {
+                // program->PrepareToCall();
+                // program->Pop();
+                for (auto iter = children_.rbegin(); iter != children_.rend(); ++iter) {
+                    (*iter)->BuildProgram(program);
+                    program->PrepareArg();
                 }
+                // program->Call();
             }
         BEGINRULE(CallOp)
             TOKEN(LeftParen);
             MAYBE({
-                EXPECT(arg, RULE(OrExpression));
+                EXPECT(arg, RULE(AssignmentExpression));
                 ASTERISK({
                     TOKEN(Comma);
-                    EXPECT(arg, RULE(OrExpression));
+                    EXPECT(arg, RULE(AssignmentExpression));
                 });
             });
             TOKEN(RightParen);
         ENDRULE(CallOp)
 
         DEFRULE(Member)
+            virtual void BuildProgram(vpl::Program* program) const override {
+                program->Member(GET_TOKEN_STRING(children_[0]));
+            }
         BEGINRULE(Member)
             TOKEN(MemberOp);
             EXPECT(member, TOKEN(Identifier));
         ENDRULE(Member)
 
         DEFRULE(Arrow)
+            virtual void BuildProgram(vpl::Program* program) const override {
+                program->Arrow(GET_TOKEN_STRING(children_[0]));
+            }
         BEGINRULE(Arrow)
             TOKEN(ArrowOp);
             EXPECT(member, TOKEN(Identifier));
         ENDRULE(Arrow)
 
         DEFRULE(UnaryOperator)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                switch (children_[0]->GetType()) {
+            virtual void BuildProgram(vpl::Program* program) const override {
+                int op_type = children_[0]->GetType();
+                switch (op_type) {
+                    case kAmpersandType:
+                        program->Ampersand();
+                        break;
+                    case kAsteriskType:
+                        program->Asterisk();
+                        break;
+                    case kPlusType:
+                        break;
                     case kMinusType:
-                        out << "    neg\n";
+                        program->Negate();
                         break;
                     case kNotType:
-                        out << "    not\n";
+                        program->BoolNegate();
                         break;
                     case kBitwiseNotType:
-                        out << "    push -1\n";
-                        out << "    xor\n";
+                        program->BitwiseNegate();
                         break;
                 }
             }
         BEGINRULE(UnaryOperator)
-            OR4(
-//                EXPECT(op, TOKEN(Ampersand)),
-//                EXPECT(op, TOKEN(Asterisk)),
+            OR6(
+                EXPECT(op, TOKEN(Ampersand)),
+                EXPECT(op, TOKEN(Asterisk)),
                 EXPECT(op, TOKEN(Plus)),
                 EXPECT(op, TOKEN(Minus)),
                 EXPECT(op, TOKEN(Not)),
@@ -655,21 +777,20 @@ DEFGRAMMAR(VPL)
         ENDRULE(ConditionalExpression)
 */
         DEFRULE(OrExpression)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                children_[0]->BuildProgram(scope, out);
+            virtual void BuildProgram(vpl::Program* program) const override {
                 if (children_.size() == 1) {
+                    children_[0]->BuildProgram(program);
                     return;
                 }
-                out << "    bool\n";
-                int unique_id = scope->GetUnique();
+
+                program->CreateOr();
+                children_[0]->BuildProgram(program);
                 for (size_t i = 1; i < children_.size(); ++i) {
-                    out << "    jnz .L" << unique_id << "_end\n";
-                    children_[i]->BuildProgram(scope, out);
-                    out << "    bool\n";
-                    out << "    or\n";
-                    scope->Pop();
+                    program->CheckFoldOr();
+                    children_[i]->BuildProgram(program);
+                    program->Or();
                 }
-                out << "func .L" << unique_id << "_end\n";
+                program->EndOr();
             }
         BEGINRULE(OrExpression)
             EXPECT(and_expr, RULE(AndExpression));
@@ -680,21 +801,20 @@ DEFGRAMMAR(VPL)
         ENDRULE(OrExpression)
 
         DEFRULE(AndExpression)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                children_[0]->BuildProgram(scope, out);
+            virtual void BuildProgram(vpl::Program* program) const override {
                 if (children_.size() == 1) {
+                    children_[0]->BuildProgram(program);
                     return;
                 }
-                out << "    bool\n";
-                int unique_id = scope->GetUnique();
+
+                program->CreateAnd();
+                children_[0]->BuildProgram(program);
                 for (size_t i = 1; i < children_.size(); ++i) {
-                    out << "    jz .L" << unique_id << "_end\n";
-                    children_[i]->BuildProgram(scope, out);
-                    out << "    bool\n";
-                    out << "    and\n";
-                    scope->Pop();
+                    program->CheckFoldAnd();
+                    children_[i]->BuildProgram(program);
+                    program->And();
                 }
-                out << "func .L" << unique_id << "_end\n";
+                program->EndAnd();
             }
         BEGINRULE(AndExpression)
             EXPECT(bitwise_or_expr, RULE(BitwiseOrExpression));
@@ -705,12 +825,11 @@ DEFGRAMMAR(VPL)
         ENDRULE(AndExpression)
 
         DEFRULE(BitwiseOrExpression)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                children_[0]->BuildProgram(scope, out);
+            virtual void BuildProgram(vpl::Program* program) const override {
+                children_[0]->BuildProgram(program);
                 for (size_t i = 1; i < children_.size(); ++i) {
-                    children_[i]->BuildProgram(scope, out);
-                    out << "    or\n";
-                    scope->Pop();
+                    children_[i]->BuildProgram(program);
+                    program->BitwiseOr();
                 }
             }
         BEGINRULE(BitwiseOrExpression)
@@ -722,12 +841,11 @@ DEFGRAMMAR(VPL)
         ENDRULE(BitwiseOrExpression)
 
         DEFRULE(BitwiseXorExpression)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                children_[0]->BuildProgram(scope, out);
+            virtual void BuildProgram(vpl::Program* program) const override {
+                children_[0]->BuildProgram(program);
                 for (size_t i = 1; i < children_.size(); ++i) {
-                    children_[i]->BuildProgram(scope, out);
-                    out << "    xor\n";
-                    scope->Pop();
+                    children_[i]->BuildProgram(program);
+                    program->BitwiseXor();
                 }
             }
         BEGINRULE(BitwiseXorExpression)
@@ -739,12 +857,11 @@ DEFGRAMMAR(VPL)
         ENDRULE(BitwiseXorExpression)
 
         DEFRULE(BitwiseAndExpression)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                children_[0]->BuildProgram(scope, out);
+            virtual void BuildProgram(vpl::Program* program) const override {
+                children_[0]->BuildProgram(program);
                 for (size_t i = 1; i < children_.size(); ++i) {
-                    children_[i]->BuildProgram(scope, out);
-                    out << "    and\n";
-                    scope->Pop();
+                    children_[i]->BuildProgram(program);
+                    program->BitwiseAnd();
                 }
             }
         BEGINRULE(BitwiseAndExpression)
@@ -756,12 +873,14 @@ DEFGRAMMAR(VPL)
         ENDRULE(BitwiseAndExpression)
 
         DEFRULE(EqualityExpression)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                children_[0]->BuildProgram(scope, out);
-                for (size_t i = 2; i < children_.size(); i += 2) {
-                    children_[i]->BuildProgram(scope, out);
-                    out << "    " << (children_[i - 1]->GetType() == kEqualOpType ? "ceq" : "cne") << "\n";
-                    scope->Pop();
+            virtual void BuildProgram(vpl::Program* program) const override {
+                children_[0]->BuildProgram(program);
+                for (size_t i = 1; i < children_.size(); i += 2) {
+                    children_[i + 1]->BuildProgram(program);
+                    program->Compare();
+                    if (children_[i]->GetType() == kNotEqualOpType) {
+                        program->BoolNegate();
+                    }
                 }
             }
         BEGINRULE(EqualityExpression)
@@ -776,27 +895,25 @@ DEFGRAMMAR(VPL)
         ENDRULE(EqualityExpression)
 
         DEFRULE(RelationalExpression)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                children_[0]->BuildProgram(scope, out);
-                for (size_t i = 2; i < children_.size(); i += 2) {
-                    children_[i]->BuildProgram(scope, out);
-                    out << "    ";
-                    switch(children_[i - 1]->GetType()) {
+            virtual void BuildProgram(vpl::Program* program) const override {
+                children_[0]->BuildProgram(program);
+                for (size_t i = 1; i < children_.size(); i += 2) {
+                    children_[i + 1]->BuildProgram(program);
+                    int op_type = children_[i]->GetType();
+                    switch (op_type) {
                         case kLessOrEqualOpType:
-                            out << "    cle\n";
+                            program->LessOrEqual();
                             break;
                         case kGreaterOrEqualOpType:
-                            out << "    cge\n";
+                            program->GreaterOrEqual();
                             break;
                         case kLessOpType:
-                            out << "    clt\n";
+                            program->Less();
                             break;
                         case kGreaterOpType:
-                            out << "    cgt\n";
+                            program->Greater();
                             break;
                     }
-                    out << '\n';
-                    scope->Pop();
                 }
             }
         BEGINRULE(RelationalExpression)
@@ -813,21 +930,19 @@ DEFGRAMMAR(VPL)
         ENDRULE(RelationalExpression)
 
         DEFRULE(ShiftExpression)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                children_[0]->BuildProgram(scope, out);
-                for (size_t i = 2; i < children_.size(); i += 2) {
-                    children_[i]->BuildProgram(scope, out);
-                    out << "    ";
-                    switch(children_[i - 1]->GetType()) {
+            virtual void BuildProgram(vpl::Program* program) const override {
+                children_[0]->BuildProgram(program);
+                for (size_t i = 1; i < children_.size(); i += 2) {
+                    children_[i + 1]->BuildProgram(program);
+                    int op_type = children_[i]->GetType();
+                    switch (op_type) {
                         case kShiftLeftType:
-                            out << "    shl\n";
+                            program->ShiftLeft();
                             break;
                         case kShiftRightType:
-                            out << "    shr\n";
+                            program->ShiftRight();
                             break;
                     }
-                    out << '\n';
-                    scope->Pop();
                 }
             }
         BEGINRULE(ShiftExpression)
@@ -842,21 +957,19 @@ DEFGRAMMAR(VPL)
         ENDRULE(ShiftExpression)
 
         DEFRULE(AdditiveExpression)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                children_[0]->BuildProgram(scope, out);
-                for (size_t i = 2; i < children_.size(); i += 2) {
-                    children_[i]->BuildProgram(scope, out);
-                    out << "    ";
-                    switch(children_[i - 1]->GetType()) {
+            virtual void BuildProgram(vpl::Program* program) const override {
+                children_[0]->BuildProgram(program);
+                for (size_t i = 1; i < children_.size(); i += 2) {
+                    children_[i + 1]->BuildProgram(program);
+                    int op_type = children_[i]->GetType();
+                    switch (op_type) {
                         case kPlusType:
-                            out << "    add\n";
+                            program->Add();
                             break;
                         case kMinusType:
-                            out << "    sub\n";
+                            program->Sub();
                             break;
                     }
-                    out << '\n';
-                    scope->Pop();
                 }
             }
         BEGINRULE(AdditiveExpression)
@@ -871,24 +984,22 @@ DEFGRAMMAR(VPL)
         ENDRULE(AdditiveExpression)
 
         DEFRULE(MultiplicativeExpression)
-            virtual void BuildProgram(vpl::Scope* scope, std::ostream& out) const override {
-                children_[0]->BuildProgram(scope, out);
-                for (size_t i = 2; i < children_.size(); i += 2) {
-                    children_[i]->BuildProgram(scope, out);
-                    out << "    ";
-                    switch(children_[i - 1]->GetType()) {
+            virtual void BuildProgram(vpl::Program* program) const override {
+                children_[0]->BuildProgram(program);
+                for (size_t i = 1; i < children_.size(); i += 2) {
+                    children_[i + 1]->BuildProgram(program);
+                    int op_type = children_[i]->GetType();
+                    switch (op_type) {
                         case kMultiplyType:
-                            out << "    mul\n";
+                            program->Mul();
                             break;
                         case kDivideType:
-                            out << "    div\n";
+                            program->Div();
                             break;
                         case kModuloType:
-                            out << "    mod\n";
+                            program->Mod();
                             break;
                     }
-                    out << '\n';
-                    scope->Pop();
                 }
             }
         BEGINRULE(MultiplicativeExpression)
@@ -899,8 +1010,7 @@ DEFGRAMMAR(VPL)
                     EXPECT(op, TOKEN(Divide)),
                     EXPECT(op, TOKEN(Modulo))
                 );
-//                EXPECT(cast_expr, RULE(CastExpression));
-                EXPECT(unary_expr, RULE(UnaryExpression));
+                EXPECT(cast_expr, RULE(CastExpression));
             });
         ENDRULE(MultiplicativeExpression)
 
