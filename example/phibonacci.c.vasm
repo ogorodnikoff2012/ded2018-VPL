@@ -1,0 +1,157 @@
+func phibonacci
+func .L1_if
+#void vpl::Scope::LoadVariable(const std::string &)
+#void vpl::Scope::LoadVariableAddr(const std::string &)
+    push 0
+    push %1
+    add
+    pop %2
+    push !2
+    push 2
+        clt
+
+    jz .L1_else
+func .L1_then
+    pop 0
+    push 1
+    pop %3
+    ret
+    jmp .L1_end
+func .L1_else
+    pop 0
+#void vpl::Scope::PrepareFunction(const std::string &)
+    push %1
+#void vpl::Scope::LoadVariable(const std::string &)
+#void vpl::Scope::LoadVariableAddr(const std::string &)
+    push 0
+    push %1
+    add
+    pop %2
+    push !2
+    push 1
+        sub
+
+#void vpl::Scope::CallFunction(const std::string &)
+    push 1
+    push %1
+    add
+    pop %1
+    pop !1
+    push %1
+    push 1
+    add
+    pop %1
+    push %1
+    push 1
+    sub
+    pop %1
+    call phibonacci
+    pop %1
+    push %3
+#void vpl::Scope::PrepareFunction(const std::string &)
+    push %1
+#void vpl::Scope::LoadVariable(const std::string &)
+#void vpl::Scope::LoadVariableAddr(const std::string &)
+    push 0
+    push %1
+    add
+    pop %2
+    push !2
+    push 2
+        sub
+
+#void vpl::Scope::CallFunction(const std::string &)
+    push 1
+    push %1
+    add
+    pop %1
+    pop !1
+    push %1
+    push 1
+    add
+    pop %1
+    push %1
+    push 1
+    sub
+    pop %1
+    call phibonacci
+    pop %1
+    push %3
+        add
+
+    pop %3
+    ret
+func .L1_end
+    ret
+func main
+#void vpl::Scope::PrepareFunction(const std::string &)
+    push %1
+#void vpl::Scope::CallFunction(const std::string &)
+    push 1
+    push %1
+    add
+    pop %1
+    push %1
+    push 0
+    sub
+    pop %1
+    call read_int
+    pop %1
+    push %3
+#void vpl::Scope::LoadVariableAddr(const std::string &)
+    push 0
+    push %1
+    add
+    pop %2
+    dup
+    pop !2
+#void vpl::Scope::PrepareFunction(const std::string &)
+    push %1
+#void vpl::Scope::PrepareFunction(const std::string &)
+    push %1
+#void vpl::Scope::LoadVariable(const std::string &)
+#void vpl::Scope::LoadVariableAddr(const std::string &)
+    push 0
+    push %1
+    add
+    pop %2
+    push !2
+#void vpl::Scope::CallFunction(const std::string &)
+    push 1
+    push %1
+    add
+    pop %1
+    pop !1
+    push %1
+    push 1
+    add
+    pop %1
+    push %1
+    push 1
+    sub
+    pop %1
+    call phibonacci
+    pop %1
+    push %3
+#void vpl::Scope::CallFunction(const std::string &)
+    push 1
+    push %1
+    add
+    pop %1
+    pop !1
+    push %1
+    push 1
+    add
+    pop %1
+    push %1
+    push 1
+    sub
+    pop %1
+    call write_int
+    pop %1
+    push %3
+    push 0
+    pop %3
+    ret
+    ret
+#void vpl::Scope::Finish()

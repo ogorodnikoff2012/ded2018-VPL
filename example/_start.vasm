@@ -1,0 +1,18 @@
+func __start
+    push __bss_size
+    pop %2 # AssignRegister
+    call main
+func .L0
+    halt
+    jmp .L0
+
+func write_int
+    push !1 # StackPointerRegister
+    wrint
+    ret
+
+func read_int
+    rdint
+    pop %3 # RetRegister
+    ret
+
